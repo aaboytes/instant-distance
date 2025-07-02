@@ -821,7 +821,7 @@ impl Default for Search {
 }
 
 pub trait Point: Clone + Sync {
-    fn xdistance(&self, other: &Self) -> f32;
+    fn distance(&self, other: &Self) -> f32;
 }
 
 /// The parameter `M` from the paper
@@ -849,12 +849,12 @@ impl<'a, P: Point> PointMgr<'a, P> for &'a [P] {
     fn calc_distance(&self, a: PointId, b: PointId) -> f32 {
         let a = &self[a];
         let b = &self[b];
-        a.xdistance(b)
+        a.distance(b)
     }
 
     fn calc_distance_from(&self, a: PointId, b: &P) -> f32 {
         let a = &self[a];
-        a.xdistance(b)
+        a.distance(b)
     }
 
     fn get(&'a self, idx: PointId) -> Self::R {
