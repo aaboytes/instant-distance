@@ -4,7 +4,7 @@ use std::{
     ops::Deref,
     sync::atomic::{self, AtomicUsize},
 };
-// #[cfg(not(feature = "segment-vec"))]
+// #[cfg(not(any(feature = "segment-vec", feature = "segvec")))]
 // use std::vec::Vec;
 
 #[cfg(feature = "indicatif")]
@@ -23,9 +23,95 @@ pub use types::*;
 
 #[cfg(feature = "segment-vec")]
 pub mod vec;
-// #[cfg(feature = "segment-vec")]
+// #[cfg(any(feature = "segment-vec", feature = "segvec"))]
 // use vec::Vec;
 
+// #[cfg(feature = "segvec")]
+mod vec {
+    use std::marker::PhantomData;
+
+    // use rayon::iter::{FromParallelIterator, ParallelIterator};
+    use segvec::{Linear, MemConfig, SegVec};
+
+    use crate::{Layer, NearestIter, Point, PointId, PointMgr, UpperNode, ZeroNode};
+    const SEGMENT_BYTES: usize = 1024 * 1024 * 1024;
+
+    /// FixedSize all segments can hold the same amount of T elements.
+    pub struct FixedSize<T, const BYTES: usize = SEGMENT_BYTES> (PhantomData<T>);
+    pub type SegmentedVector<T> = SegVec<T, FixedSize<T>>;
+    pub type Vec<T> = SegmentedVector<T>;
+
+    impl <T, const BYTES: usize> FixedSize<T, BYTES> {
+        const ELEMENTS_PER_SEGMENT: usize = BYTES / std::mem::size_of::<T>();
+    }
+
+    impl<T, const BYTES: usize> MemConfig for FixedSize<T, BYTES> {
+        fn new() -> Self {
+            Self(PhantomData)
+        }
+
+        #[track_caller]
+        fn debug_assert_config() {
+            debug_assert_ne!(BYTES, 0, "FACTOR must be greater than 0")
+        }
+
+        #[inline]
+        fn capacity(&self, segments: usize) -> usize {
+            segments * Self::ELEMENTS_PER_SEGMENT
+        }
+
+        #[inline]
+        fn segment_size(&self, _segment: usize) -> usize {
+            Self::ELEMENTS_PER_SEGMENT
+        }
+
+        #[inline]
+        fn segment_and_offset(&self, index: usize) -> (usize, usize) {
+            (index / Self::ELEMENTS_PER_SEGMENT, index % Self::ELEMENTS_PER_SEGMENT)
+        }
+    }
+
+    impl<'a> Layer for &'a SegmentedVector<UpperNode> {
+        type Slice = &'a [PointId];
+
+        fn nearest_iter(&self, pid: PointId) -> NearestIter<Self::Slice> {
+            // TOOD: does get_unchecked make things faster?
+            NearestIter::new(&self[pid.0 as usize].0)
+        }
+    }
+
+    impl<'a> Layer for &'a SegmentedVector<ZeroNode> {
+        type Slice = &'a [PointId];
+
+        fn nearest_iter(&self, pid: PointId) -> NearestIter<Self::Slice> {
+            NearestIter::new(&self[pid.0 as usize])
+        }
+    }
+
+    impl<'a, P: Point> PointMgr<'a, P> for &'a SegmentedVector<P> {
+        type R = &'a P;
+
+        fn calc_distance(&self, a: PointId, b: PointId) -> f32 {
+            let b = self.get(b);
+            self.calc_distance_from(a, &*b)
+        }
+
+        fn calc_distance_from(&self, a: PointId, b: &P) -> f32 {
+            let a = self.get(a);
+            a.distance(b)
+        }
+
+        fn get(&'a self, idx: PointId) -> Self::R {
+            unsafe { <SegmentedVector<P>>::get_unchecked(self, idx.0 as usize) }
+        }
+
+        fn num_vectors(&self) -> usize {
+            self.len()
+        }
+    }
+}
+// #[cfg(feature = "segvec")]
+// use vec::*;
 
 #[derive(Clone)]
 /// Parameters for building the `Hnsw`
@@ -214,7 +300,7 @@ impl<'a, P, V> MapItem<'a, P, V> {
 }
 
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-#[cfg(not(feature = "segment-vec"))]
+#[cfg(not(any(feature = "segment-vec", feature = "segvec")))]
 pub struct Hnsw<P> {
     pub ef_search: usize,
     pub points: Vec<P>,
@@ -223,7 +309,7 @@ pub struct Hnsw<P> {
 }
 
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-#[cfg(feature = "segment-vec")]
+#[cfg(any(feature = "segment-vec", feature = "segvec"))]
 pub struct Hnsw<P> {
     ef_search: usize,
     points: Vec<P>,
@@ -315,9 +401,9 @@ where
 
         // Initialize data for layers
 
-        #[cfg(not(feature = "segment-vec"))]
+        #[cfg(not(any(feature = "segment-vec", feature = "segvec")))]
         let mut layers = vec![vec![]; top.0];
-        #[cfg(feature = "segment-vec")]
+        #[cfg(any(feature = "segment-vec", feature = "segvec"))]
         let mut layers = vec![vec::SegmentedVector::new(); top.0];
         let zero = points
             .iter()
@@ -355,7 +441,7 @@ where
 
             // For layers above the zero layer, make a copy of the current state of the zero layer
             // with `nearest` truncated to `M` elements.
-            #[cfg(not(feature = "segment-vec"))]
+            #[cfg(not(any(feature = "segment-vec", feature = "segvec")))]
             if !layer.is_zero() {
                 (&state.zero[..end])
                     .into_par_iter()
@@ -363,7 +449,8 @@ where
                     .collect_into_vec(&mut layers[layer.0 - 1]);
             }
 
-            #[cfg(feature = "segment-vec")]
+            // eprintln!("building layer: {}", layer.0);
+            #[cfg(any(feature = "segment-vec", feature = "segvec"))]
             if !layer.is_zero() {
                 layers[layer.0 - 1] = 
                 (&state.zero[..end])
@@ -416,16 +503,16 @@ where
             search.ef = ef;
             match cur.0 {
                 0 => {
-                    #[cfg(feature = "segment-vec")]
+                    #[cfg(any(feature = "segment-vec", feature = "segvec"))]
                     let layer = &self.zero;
-                    #[cfg(not(feature = "segment-vec"))]
+                    #[cfg(not(any(feature = "segment-vec", feature = "segvec")))]
                     let layer = self.zero.as_slice();
                     search.search(point, layer, &self.points.as_slice(), num)
                 },
                 l => {
-                    #[cfg(feature = "segment-vec")]
+                    #[cfg(any(feature = "segment-vec", feature = "segvec"))]
                     let layer = &self.layers[l - 1];
-                    #[cfg(not(feature = "segment-vec"))]
+                    #[cfg(not(any(feature = "segment-vec", feature = "segvec")))]
                     let layer = self.layers[l - 1].as_slice();
                     search.search(point, layer, &self.points.as_slice(), num)
                 },
@@ -491,9 +578,9 @@ impl<P: Point> Construction<'_, P> {
     /// Creates the new node, initializing its `nearest` array and updates the nearest neighbors
     /// for the new node's neighbors if necessary before appending the new node to the layer.
     fn insert(&self, new: PointId, layer: LayerId, 
-        #[cfg(feature = "segment-vec")]
+        #[cfg(any(feature = "segment-vec", feature = "segvec"))]
         layers: &[vec::SegmentedVector<UpperNode>],
-        #[cfg(not(feature = "segment-vec"))]
+        #[cfg(not(any(feature = "segment-vec", feature = "segvec")))]
         layers: &[Vec<UpperNode>]
     ) {
         let mut node = self.zero[new].write();
@@ -513,9 +600,9 @@ impl<P: Point> Construction<'_, P> {
             };
             match cur > layer {
                 true => {
-                    #[cfg(feature = "segment-vec")]
+                    #[cfg(any(feature = "segment-vec", feature = "segvec"))]
                     let layer = &layers[cur.0 - 1];
-                    #[cfg(not(feature = "segment-vec"))]
+                    #[cfg(not(any(feature = "segment-vec", feature = "segvec")))]
                     let layer = layers[cur.0 - 1].as_slice();
                     search.search(point, layer, &self.points, num);
                     search.cull();
