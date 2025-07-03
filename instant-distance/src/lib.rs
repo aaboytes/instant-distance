@@ -26,12 +26,11 @@ pub mod vec;
 // #[cfg(any(feature = "segment-vec", feature = "segvec"))]
 // use vec::Vec;
 
-// #[cfg(feature = "segvec")]
+#[cfg(feature = "segvec")]
 mod vec {
     use std::marker::PhantomData;
 
-    // use rayon::iter::{FromParallelIterator, ParallelIterator};
-    use segvec::{Linear, MemConfig, SegVec};
+    use segvec::{MemConfig, SegVec};
 
     use crate::{Layer, NearestIter, Point, PointId, PointMgr, UpperNode, ZeroNode};
     const SEGMENT_BYTES: usize = 1024 * 1024 * 1024;

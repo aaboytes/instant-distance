@@ -14,7 +14,7 @@ readme = "../README.md"
 [features]
 with-serde = ["serde", "serde-big-array"]
 segment-vec = []
-segvec = []
+segvec = ["dep:segvec"]
 
 [dependencies]
 indicatif = { version = "0.17", optional = true }
@@ -25,7 +25,7 @@ rand = { version = "0.9", features = ["small_rng"] }
 rayon = "1.5"
 serde = { version = "1.0.118", features = ["derive"], optional = true }
 serde-big-array = { version = "0.5.0", optional = true }
-segvec = { path = "../segvec" }
+segvec = { path = "../segvec", features = ["rayon"], optional = true }
 
 [dev-dependencies]
 bencher = "0.1.5"
